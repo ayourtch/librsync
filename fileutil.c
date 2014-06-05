@@ -77,6 +77,17 @@ rs_file_open(char const *filename, char const *mode)
 
 int rs_file_close(FILE * f)
 {
+    off_t cur;
+    off_t end;
+    char nul = 0;
     if ((f == stdin) || (f == stdout)) return 0;
+    cur = ftello(f);
+    fseek(f, 0, SEEK_END);
+    end = ftello(f);
+    if (end < cur) {
+      fseeko(f, cur-1, SEEK_SET);
+      fwrite(&nul, 1, 1, f);
+    }
+ 
     return fclose(f);
 }

@@ -151,6 +151,77 @@ rs_result rs_infilebuf_fill(rs_job_t *job, rs_buffers_t *buf,
 }
 
 
+int try_making_a_hole(FILE *f, int hole_size, char *zero_buffer) {
+  /* compilation will fail here if off_t is too short */
+  char assert_off_t_size[(sizeof(off_t) == sizeof(long long))-1] __attribute((unused));
+
+  off_t cur = ftello(f);
+  off_t size = 0;
+  int ret = 0;
+
+  size = fseeko(f, 0, SEEK_END);
+  fseeko(f, cur, SEEK_SET);
+
+  if(cur > size) {
+    /* We are already past the end of file - just advance */
+    if(0 == fseeko(f, hole_size, SEEK_CUR)) {
+      ret = hole_size;
+    }
+  } else {
+    if(cur + hole_size > size) {
+      /* 
+       * Part of the hole we are trying to build is 
+       * within the file, part is outside the file.
+       * This means we can get rid of the extra data 
+       * truncating the file to the current position,
+       * then seeking past the end of file to create a hole.
+       */
+      if( (0 == ftruncate(fileno(f), cur)) &&
+          (0 == fseeko(f, hole_size, SEEK_CUR)) ) {
+        ret = hole_size;
+      }
+    } else {
+      /* 
+       * Both the beginning and the end of the hole are
+       * within the existing file... we can only write zeroes.
+       */
+      ret = fwrite(zero_buffer, 1, hole_size, f);
+    }
+  }
+  return ret;
+}
+
+int write_with_holes(rs_filebuf_t *fb, int present, FILE *f) {
+  char *pc = fb->buf;
+  char *pc_start = NULL;
+  int seek = 0;
+  int count = 0;
+  int ret = 0;
+  while(present > 0) {
+    seek = 0;
+    pc_start = pc;
+    while((0 == *pc) && (present > 0)) {
+      pc++;
+      present--;
+      seek++;
+    }
+    if(seek > 0) {
+      ret += try_making_a_hole(f, seek, pc_start);
+    }
+    count = 0;
+    pc_start = pc;
+    while((*pc) && (present > 0)) {
+      count++;
+      pc++;
+      present--;
+    }
+    if(count > 0) {
+      ret += fwrite(pc_start, 1, count, f);
+    }
+  }
+  return ret;
+}
+
 /*
  * The buf is already using BUF for an output buffer, and probably
  * contains some buffered output now.  Write this out to F, and reset
@@ -183,7 +254,7 @@ rs_result rs_outfilebuf_drain(rs_job_t *job, rs_buffers_t *buf, void *opaque)
                 
         assert(present > 0);
 
-        result = fwrite(fb->buf, 1, present, f);
+        result = write_with_holes(fb, present, f);
         if (present != result) {
             rs_error("error draining buf to file: %s",
                      strerror(errno));
