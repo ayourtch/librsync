@@ -268,6 +268,30 @@ rs_result rs_outfilebuf_drain(rs_job_t *job, rs_buffers_t *buf, void *opaque)
     return RS_DONE;
 }
 
+/* a file seek that will flush the unfinished holes */
+
+int rs_file_seek(FILE *f, off_t pos) {
+    off_t cur;
+    off_t end;
+    char nul = 0;
+
+    cur = ftello(f);
+    if (fseek(f, 0, SEEK_END)) { 
+      return -1; 
+    }
+    end = ftello(f);
+
+    if ((end < cur) && (pos < cur)) {
+      if(fseeko(f, cur-1, SEEK_SET)) {
+        return -1;
+      }
+      if(1 != fwrite(&nul, 1, 1, f)) {
+        return -1;
+      }
+    }
+    return fseek(f, pos, SEEK_SET);
+}
+
 
 /**
  * Default copy implementation that retrieves a part of a stdio file.
@@ -277,7 +301,7 @@ rs_result rs_file_copy_cb(void *arg, rs_long_t pos, size_t *len, void **buf)
     int        got;
     FILE       *f = (FILE *) arg;
 
-    if (fseek(f, pos, SEEK_SET)) {
+    if (rs_file_seek(f, pos)) {
         rs_log(RS_LOG_ERR, "seek failed: %s", strerror(errno));
         return RS_IO_ERROR;
     }
